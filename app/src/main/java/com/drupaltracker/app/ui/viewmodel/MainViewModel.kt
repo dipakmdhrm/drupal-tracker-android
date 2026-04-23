@@ -6,13 +6,20 @@ import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.drupaltracker.app.data.api.GeminiClient
+import com.drupaltracker.app.data.api.IssueRssFetcher
 import com.drupaltracker.app.data.api.RetrofitClient
 import com.drupaltracker.app.data.db.AppDatabase
-import com.drupaltracker.app.data.model.SeenIssue
-import com.drupaltracker.app.data.model.WatchedProject
+import com.drupaltracker.app.data.model.IssueApiModel
+import com.drupaltracker.app.data.model.NotificationRecord
+import com.drupaltracker.app.data.model.ProjectNodeApiModel
+import com.drupaltracker.app.data.model.StarredIssue
+import com.drupaltracker.app.data.model.StarredProject
 import com.drupaltracker.app.data.model.toPriorityLabel
+import com.drupaltracker.app.data.model.toProjectNodeApiModel
 import com.drupaltracker.app.data.model.toStatusLabel
+import com.drupaltracker.app.data.preferences.NotificationSettings
 import com.drupaltracker.app.data.preferences.SettingsRepository
+import com.drupaltracker.app.ui.navigation.Screen
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -25,31 +32,60 @@ data class SummarySheet(
     val loading: Boolean = true
 )
 
+enum class SearchMode { BY_PROJECT, BY_ISSUE }
+
 data class UiState(
-    val projects: List<WatchedProject> = emptyList(),
-    val selectedProjectNid: String? = null,
-    val issuesForSelected: List<SeenIssue> = emptyList(),
-    val isSearching: Boolean = false,
+    val screen: Screen = Screen.SearchTab,
+    // Search tab
+    val searchMode: SearchMode = SearchMode.BY_PROJECT,
     val searchQuery: String = "",
-    val searchResult: WatchedProject? = null,
+    val projectSearchResults: List<ProjectNodeApiModel> = emptyList(),
+    val issueSearchResults: List<IssueApiModel> = emptyList(),
+    val searchIsLoading: Boolean = false,
     val searchError: String? = null,
-    val isLoading: Boolean = false,
-    val showSettings: Boolean = false,
+    val searchHasMore: Boolean = false,
+    val searchPage: Int = 0,
+    // Project issue list (drill-down from search or starred)
+    val projectIssues: List<IssueApiModel> = emptyList(),
+    val projectIssueKeyword: String = "",
+    val projectIssuePage: Int = 0,
+    val projectIssueHasMore: Boolean = false,
+    val projectIssueIsLoading: Boolean = false,
+    val projectIssueError: String? = null,
+    // Starred
+    val starredProjects: List<StarredProject> = emptyList(),
+    val starredIssues: List<StarredIssue> = emptyList(),
+    // Notification stream
+    val notifications: List<NotificationRecord> = emptyList(),
+    val notifPage: Int = 0,
+    val notifHasMore: Boolean = false,
+    val unreadNotifCount: Int = 0,
+    // Settings
     val geminiApiKey: String = "",
+    val notificationSettings: NotificationSettings = NotificationSettings(),
+    // Summary sheet
     val summarySheet: SummarySheet? = null
 )
+
+private const val PAGE_SIZE = 10
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val db = AppDatabase.getInstance(application)
     private val settings = SettingsRepository(application)
     private val _state = MutableStateFlow(UiState())
+    private val backStack = ArrayDeque<Screen>()
     val state: StateFlow<UiState> = _state.asStateFlow()
 
     init {
         viewModelScope.launch {
-            db.projectDao().getAllProjects().collect { projects ->
-                _state.update { it.copy(projects = projects) }
+            db.starredProjectDao().getAllProjects().collect { projects ->
+                _state.update { it.copy(starredProjects = projects) }
+            }
+        }
+        viewModelScope.launch {
+            db.starredIssueDao().getAllIssues().collect { issues ->
+                _state.update { it.copy(starredIssues = issues) }
             }
         }
         viewModelScope.launch {
@@ -57,92 +93,287 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 _state.update { it.copy(geminiApiKey = key) }
             }
         }
+        viewModelScope.launch {
+            settings.notificationSettingsFlow.collect { ns ->
+                _state.update { it.copy(notificationSettings = ns) }
+            }
+        }
+        loadNotifications(reset = true)
     }
 
     // --- Navigation ---
 
-    fun showSettings() = _state.update { it.copy(showSettings = true) }
-    fun hideSettings() = _state.update { it.copy(showSettings = false) }
+    fun navigate(screen: Screen) = _state.update { it.copy(screen = screen) }
 
-    fun saveApiKey(key: String) {
-        viewModelScope.launch {
-            settings.saveApiKey(key.trim())
-            _state.update { it.copy(showSettings = false) }
-        }
+    fun navigateToIssue(url: String, title: String) {
+        backStack.addLast(_state.value.screen)
+        _state.update { it.copy(screen = Screen.IssueWebView(url, title)) }
     }
 
-    // --- Projects ---
-
-    fun selectProject(nid: String?) {
-        _state.update { it.copy(selectedProjectNid = nid, issuesForSelected = emptyList()) }
-        if (nid != null) {
-            viewModelScope.launch {
-                db.issueDao().getIssuesForProject(nid).collect { issues ->
-                    _state.update { it.copy(issuesForSelected = issues) }
-                }
+    fun navigateBack() {
+        if (backStack.isNotEmpty()) {
+            _state.update { it.copy(screen = backStack.removeLast()) }
+            return
+        }
+        val current = _state.value.screen
+        val parent: Screen = when (current) {
+            is Screen.ProjectIssues -> when (current.sourceTab) {
+                Screen.SourceTab.STARRED -> Screen.StarredTab
+                else -> Screen.SearchTab
             }
+            is Screen.NotificationStream -> Screen.SearchTab
+            is Screen.Settings -> Screen.SearchTab
+            else -> Screen.SearchTab
+        }
+        _state.update { it.copy(screen = parent) }
+    }
+
+    // --- Search tab ---
+
+    fun setSearchMode(mode: SearchMode) {
+        _state.update {
+            it.copy(
+                searchMode = mode,
+                searchQuery = "",
+                projectSearchResults = emptyList(),
+                issueSearchResults = emptyList(),
+                searchError = null,
+                searchHasMore = false,
+                searchPage = 0
+            )
         }
     }
 
-    fun searchProject(query: String) {
-        _state.update { it.copy(searchQuery = query, searchError = null, searchResult = null) }
+    fun onSearchQueryChange(query: String) {
+        _state.update { it.copy(searchQuery = query, searchError = null) }
     }
 
-    fun resolveProject() {
+    fun executeSearch() {
         val query = _state.value.searchQuery.trim()
         if (query.isBlank()) return
-        _state.update { it.copy(isLoading = true, searchError = null) }
+        _state.update {
+            it.copy(
+                searchIsLoading = true,
+                searchError = null,
+                projectSearchResults = emptyList(),
+                issueSearchResults = emptyList(),
+                searchPage = 0,
+                searchHasMore = false
+            )
+        }
         viewModelScope.launch {
             try {
-                val response = RetrofitClient.service.getProjectByMachineName(query)
-                val node = response.list.firstOrNull()
-                if (node == null) {
-                    _state.update { it.copy(isLoading = false, searchError = "Project '$query' not found") }
-                } else {
-                    val project = WatchedProject(
-                        nid = node.nid,
-                        machineName = node.machineName ?: query,
-                        title = node.title
-                    )
-                    _state.update { it.copy(isLoading = false, searchResult = project) }
+                when (_state.value.searchMode) {
+                    SearchMode.BY_PROJECT -> {
+                        val response = RetrofitClient.jsonApiService.searchProjectsContains(value = query, offset = 0)
+                        val projects = response.data.map { it.toProjectNodeApiModel() }
+                        _state.update {
+                            it.copy(
+                                searchIsLoading = false,
+                                projectSearchResults = projects,
+                                searchHasMore = response.links?.next != null
+                            )
+                        }
+                    }
+                    SearchMode.BY_ISSUE -> {
+                        if (query.all { it.isDigit() }) {
+                            // Direct NID lookup
+                            val detail = RetrofitClient.service.getNodeDetail(query)
+                            val issue = IssueApiModel(
+                                nid = detail.nid,
+                                title = detail.title,
+                                changed = detail.changed ?: "0"
+                            )
+                            _state.update {
+                                it.copy(
+                                    searchIsLoading = false,
+                                    issueSearchResults = listOf(issue),
+                                    searchHasMore = false
+                                )
+                            }
+                        } else {
+                            val results = IssueRssFetcher.searchGlobal(query, page = 0)
+                            _state.update {
+                                it.copy(
+                                    searchIsLoading = false,
+                                    issueSearchResults = results,
+                                    searchHasMore = results.size >= PAGE_SIZE
+                                )
+                            }
+                        }
+                    }
                 }
             } catch (e: Exception) {
                 Log.e("MainViewModel", "Search error", e)
-                _state.update { it.copy(isLoading = false, searchError = "Network error: ${e.message}") }
+                _state.update { it.copy(searchIsLoading = false, searchError = "Network error: ${e.message}") }
             }
         }
     }
 
-    fun addProject(project: WatchedProject) {
+    fun loadMoreSearchResults() {
+        val state = _state.value
+        if (!state.searchHasMore || state.searchIsLoading) return
+        val nextPage = state.searchPage + 1
+        _state.update { it.copy(searchIsLoading = true, searchPage = nextPage) }
         viewModelScope.launch {
-            db.projectDao().upsert(project)
-            _state.update { it.copy(searchResult = null, searchQuery = "", isSearching = false) }
-        }
-    }
-
-    fun removeProject(project: WatchedProject) {
-        viewModelScope.launch {
-            db.projectDao().delete(project)
-            db.issueDao().deleteForProject(project.nid)
-            if (_state.value.selectedProjectNid == project.nid) {
-                _state.update { it.copy(selectedProjectNid = null, issuesForSelected = emptyList()) }
+            try {
+                when (state.searchMode) {
+                    SearchMode.BY_PROJECT -> {
+                        val offset = state.projectSearchResults.size
+                        val response = RetrofitClient.jsonApiService.searchProjectsContains(
+                            value = state.searchQuery, offset = offset
+                        )
+                        val projects = response.data.map { it.toProjectNodeApiModel() }
+                        _state.update {
+                            it.copy(
+                                searchIsLoading = false,
+                                projectSearchResults = it.projectSearchResults + projects,
+                                searchHasMore = response.links?.next != null
+                            )
+                        }
+                    }
+                    SearchMode.BY_ISSUE -> {
+                        val results = IssueRssFetcher.searchGlobal(state.searchQuery, page = nextPage)
+                        _state.update {
+                            it.copy(
+                                searchIsLoading = false,
+                                issueSearchResults = it.issueSearchResults + results,
+                                searchHasMore = results.size >= PAGE_SIZE
+                            )
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e("MainViewModel", "Load more error", e)
+                _state.update { it.copy(searchIsLoading = false) }
             }
         }
     }
 
-    fun setSearching(searching: Boolean) {
-        _state.update { it.copy(isSearching = searching, searchQuery = "", searchResult = null, searchError = null) }
+    // --- Project issue list ---
+
+    fun openProject(nid: String, title: String, machineName: String, sourceTab: Screen.SourceTab = Screen.SourceTab.SEARCH) {
+        _state.update {
+            it.copy(
+                screen = Screen.ProjectIssues(nid, title, machineName, sourceTab),
+                projectIssues = emptyList(),
+                projectIssueKeyword = "",
+                projectIssuePage = 0,
+                projectIssueHasMore = false,
+                projectIssueError = null
+            )
+        }
+        loadProjectIssues(nid, machineName, "", page = 0)
     }
+
+    fun onProjectIssueKeywordChange(keyword: String) {
+        _state.update { it.copy(projectIssueKeyword = keyword) }
+    }
+
+    fun searchProjectIssues() {
+        val screen = _state.value.screen as? Screen.ProjectIssues ?: return
+        val keyword = _state.value.projectIssueKeyword.trim()
+        _state.update {
+            it.copy(
+                projectIssues = emptyList(),
+                projectIssuePage = 0,
+                projectIssueHasMore = false,
+                projectIssueError = null
+            )
+        }
+        loadProjectIssues(screen.projectNid, screen.projectMachineName, keyword, page = 0)
+    }
+
+    private fun loadProjectIssues(projectNid: String, machineName: String, keyword: String, page: Int) {
+        _state.update { it.copy(projectIssueIsLoading = true, projectIssueError = null) }
+        viewModelScope.launch {
+            try {
+                val issueList = IssueRssFetcher.searchInProject(machineName, keyword, page = page)
+                _state.update {
+                    it.copy(
+                        projectIssueIsLoading = false,
+                        projectIssues = if (page == 0) issueList else it.projectIssues + issueList,
+                        projectIssuePage = page,
+                        projectIssueHasMore = issueList.size >= PAGE_SIZE
+                    )
+                }
+            } catch (e: Exception) {
+                Log.e("MainViewModel", "Project issues error", e)
+                _state.update { it.copy(projectIssueIsLoading = false, projectIssueError = "Network error: ${e.message}") }
+            }
+        }
+    }
+
+    fun loadMoreProjectIssues() {
+        val state = _state.value
+        if (!state.projectIssueHasMore || state.projectIssueIsLoading) return
+        val screen = state.screen as? Screen.ProjectIssues ?: return
+        loadProjectIssues(screen.projectNid, screen.projectMachineName, state.projectIssueKeyword.trim(), state.projectIssuePage + 1)
+    }
+
+    // --- Star / unstar ---
+
+    fun starProject(project: ProjectNodeApiModel) {
+        viewModelScope.launch {
+            db.starredProjectDao().upsert(
+                StarredProject(
+                    nid = project.nid,
+                    machineName = project.machineName ?: project.nid,
+                    title = project.title
+                )
+            )
+        }
+    }
+
+    fun unstarProject(nid: String) {
+        viewModelScope.launch { db.starredProjectDao().deleteByNid(nid) }
+    }
+
+    fun starIssue(issue: IssueApiModel, projectNid: String = "", projectTitle: String = "") {
+        viewModelScope.launch {
+            db.starredIssueDao().upsert(
+                StarredIssue(
+                    nid = issue.nid,
+                    projectNid = projectNid,
+                    projectTitle = projectTitle,
+                    title = issue.title,
+                    status = issue.status,
+                    priority = issue.priority,
+                    changed = issue.changed.toLongOrNull() ?: 0L,
+                    url = issue.url,
+                    commentCount = issue.commentCount.toIntOrNull() ?: 0
+                )
+            )
+        }
+    }
+
+    fun unstarIssue(nid: String) {
+        viewModelScope.launch { db.starredIssueDao().deleteByNid(nid) }
+    }
+
+    fun isProjectStarred(nid: String): Boolean =
+        _state.value.starredProjects.any { it.nid == nid }
+
+    fun isIssueStarred(nid: String): Boolean =
+        _state.value.starredIssues.any { it.nid == nid }
 
     // --- Summarization ---
 
-    fun summarizeIssue(issue: SeenIssue) {
+    fun summarizeIssue(
+        nid: String,
+        title: String,
+        status: String,
+        priority: String,
+        commentCount: Int,
+        cachedSummary: String?,
+        summarizedCommentCount: Int
+    ) {
         val apiKey = _state.value.geminiApiKey
         if (apiKey.isBlank()) {
             _state.update {
                 it.copy(summarySheet = SummarySheet(
-                    issueNid = issue.nid,
-                    issueTitle = issue.title,
+                    issueNid = nid,
+                    issueTitle = title,
                     loading = false,
                     error = "No Gemini API key set. Go to Settings to add one."
                 ))
@@ -150,45 +381,48 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
-        // If cached and no new comments, show immediately without API call
-        if (issue.cachedSummary != null && issue.commentCount <= issue.summarizedCommentCount) {
+        if (cachedSummary != null && commentCount <= summarizedCommentCount) {
             _state.update {
                 it.copy(summarySheet = SummarySheet(
-                    issueNid = issue.nid,
-                    issueTitle = issue.title,
-                    summary = issue.cachedSummary,
+                    issueNid = nid,
+                    issueTitle = title,
+                    summary = cachedSummary,
                     loading = false
                 ))
             }
             return
         }
 
-        _state.update {
-            it.copy(summarySheet = SummarySheet(issueNid = issue.nid, issueTitle = issue.title))
-        }
+        _state.update { it.copy(summarySheet = SummarySheet(issueNid = nid, issueTitle = title)) }
         viewModelScope.launch {
             try {
-                val nodeDeferred = async { RetrofitClient.service.getNodeDetail(issue.nid) }
-                val commentsDeferred = async { RetrofitClient.service.getComments(issue.nid) }
+                val nodeDeferred = async { RetrofitClient.service.getNodeDetail(nid) }
+                val commentsDeferred = async { RetrofitClient.service.getComments(nid) }
                 val node = nodeDeferred.await()
                 val allComments = commentsDeferred.await().list
 
-                val prompt = if (issue.cachedSummary != null && issue.summarizedCommentCount > 0) {
-                    // Incremental: old summary + only the new comments
-                    val newComments = allComments.drop(issue.summarizedCommentCount)
+                val prompt = if (cachedSummary != null && summarizedCommentCount > 0) {
+                    val newComments = allComments.drop(summarizedCommentCount)
                         .take(20)
                         .joinToString("\n\n") { it.commentBody?.value?.stripHtml().orEmpty() }
-                    buildIncrementalPrompt(issue.title, issue.cachedSummary, newComments)
+                    buildIncrementalPrompt(title, cachedSummary, newComments)
                 } else {
-                    // Full summarization
                     val bodyText = node.body?.value?.stripHtml().orEmpty()
                     val commentText = allComments.take(20)
                         .joinToString("\n\n") { it.commentBody?.value?.stripHtml().orEmpty() }
-                    buildPrompt(issue.title, issue.status.toStatusLabel(), issue.priority.toPriorityLabel(), bodyText, commentText)
+                    buildPrompt(title, status.toStatusLabel(), priority.toPriorityLabel(), bodyText, commentText)
                 }
 
                 val summary = GeminiClient.summarize(apiKey, prompt)
-                db.issueDao().updateSummary(issue.nid, summary, allComments.size)
+
+                // Update both starred_issues and seen_issues caches
+                db.starredIssueDao().getIssue(nid)?.let {
+                    db.starredIssueDao().updateSummary(nid, summary, allComments.size)
+                }
+                db.issueDao().getIssue(nid)?.let {
+                    db.issueDao().updateSummary(nid, summary, allComments.size)
+                }
+
                 _state.update { it.copy(summarySheet = it.summarySheet?.copy(summary = summary, loading = false)) }
             } catch (e: Exception) {
                 Log.e("MainViewModel", "Summarize error", e)
@@ -198,6 +432,47 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun closeSummary() = _state.update { it.copy(summarySheet = null) }
+
+    // --- Notification stream ---
+
+    fun loadNotifications(reset: Boolean = false) {
+        val offset = if (reset) 0 else _state.value.notifications.size
+        viewModelScope.launch {
+            try {
+                val page = db.notificationRecordDao().getPage(limit = 50, offset = offset)
+                val total = db.notificationRecordDao().count()
+                _state.update {
+                    it.copy(
+                        notifications = if (reset) page else it.notifications + page,
+                        notifPage = if (reset) 0 else it.notifPage + 1,
+                        notifHasMore = (if (reset) page.size else it.notifications.size + page.size) < total,
+                        unreadNotifCount = if (reset) total else it.unreadNotifCount
+                    )
+                }
+            } catch (e: Exception) {
+                Log.e("MainViewModel", "Load notifications error", e)
+            }
+        }
+    }
+
+    fun loadMoreNotifications() {
+        if (!_state.value.notifHasMore) return
+        loadNotifications(reset = false)
+    }
+
+    fun clearUnreadCount() = _state.update { it.copy(unreadNotifCount = 0) }
+
+    // --- Settings ---
+
+    fun saveApiKey(key: String) {
+        viewModelScope.launch { settings.saveApiKey(key.trim()) }
+    }
+
+    fun saveNotificationSettings(s: NotificationSettings) {
+        viewModelScope.launch { settings.saveNotificationSettings(s) }
+    }
+
+    // --- Prompts ---
 
     private fun String.stripHtml(): String =
         Html.fromHtml(this, Html.FROM_HTML_MODE_COMPACT).toString().trim()

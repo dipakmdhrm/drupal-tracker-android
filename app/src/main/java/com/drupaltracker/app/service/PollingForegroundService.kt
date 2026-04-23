@@ -6,9 +6,14 @@ import android.os.IBinder
 import android.util.Log
 import com.drupaltracker.app.data.api.RetrofitClient
 import com.drupaltracker.app.data.db.AppDatabase
+import com.drupaltracker.app.data.model.NotificationRecord
 import com.drupaltracker.app.data.model.SeenIssue
+import com.drupaltracker.app.data.model.StarredIssue
+import com.drupaltracker.app.data.preferences.NotificationSettings
+import com.drupaltracker.app.data.preferences.SettingsRepository
 import com.drupaltracker.app.notifications.NotificationHelper
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.first
 
 class PollingForegroundService : Service() {
 
@@ -21,11 +26,17 @@ class PollingForegroundService : Service() {
 
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var pollingJob: Job? = null
+    private lateinit var settingsRepository: SettingsRepository
+
+    // In-memory digest accumulation
+    private val digestPendingProjectChanges = mutableListOf<String>()
+    private val digestPendingIssueChanges = mutableListOf<String>()
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
         super.onCreate()
+        settingsRepository = SettingsRepository(this)
         NotificationHelper.createChannels(this)
         startForeground(SERVICE_ID, NotificationHelper.buildServiceNotification(this))
     }
@@ -43,7 +54,12 @@ class PollingForegroundService : Service() {
         pollingJob = serviceScope.launch {
             while (isActive) {
                 try {
-                    pollAllProjects()
+                    val settings = settingsRepository.notificationSettingsFlow.first()
+                    if (settings.enabled) {
+                        pollStarredProjects(settings)
+                        checkStarredIssues(settings)
+                        checkAndSendDigests(settings)
+                    }
                 } catch (e: Exception) {
                     Log.e(TAG, "Poll error: ${e.message}")
                 }
@@ -52,10 +68,10 @@ class PollingForegroundService : Service() {
         }
     }
 
-    private suspend fun pollAllProjects() {
+    private suspend fun pollStarredProjects(settings: NotificationSettings) {
         val db = AppDatabase.getInstance(this)
-        val projects = db.projectDao().getAllProjectsOnce()
-        Log.d(TAG, "Polling ${projects.size} projects")
+        val projects = db.starredProjectDao().getAllProjectsOnce()
+        Log.d(TAG, "Polling ${projects.size} starred projects")
 
         for (project in projects) {
             try {
@@ -70,7 +86,7 @@ class PollingForegroundService : Service() {
 
                 for (issue in response.list) {
                     val changedTs = issue.changed.toLongOrNull() ?: 0L
-                    if (changedTs <= lastChecked / 1000) break  // sorted DESC — stop when old
+                    if (changedTs <= lastChecked / 1000) break
 
                     val existing = db.issueDao().getIssue(issue.nid)
                     val isNew = existing == null
@@ -90,19 +106,138 @@ class PollingForegroundService : Service() {
                             commentCount = issue.commentCount.toIntOrNull() ?: 0
                         )
                         db.issueDao().upsert(seen)
-                        NotificationHelper.postIssueNotification(
-                            context = this,
-                            issue = seen,
-                            projectName = project.title,
-                            isNew = isNew
-                        )
+
+                        val actionLabel = if (isNew) "New issue" else "Updated issue"
+                        val title = "$actionLabel · ${project.title}"
+                        val body = issue.title
+
+                        if (settings.notifyStarredProjects) {
+                            val record = NotificationRecord(
+                                title = title,
+                                body = body,
+                                timestamp = System.currentTimeMillis(),
+                                recordType = "issue_update",
+                                targetNid = issue.nid,
+                                targetUrl = issue.url,
+                                isProject = false
+                            )
+                            db.notificationRecordDao().insert(record)
+                            db.notificationRecordDao().pruneOldRecords()
+
+                            if (settings.projectNotifType == "EVERY_UPDATE") {
+                                val inserted = db.notificationRecordDao().getPage(limit = 1, offset = 0).firstOrNull()
+                                inserted?.let {
+                                    NotificationHelper.postIssueUpdateNotification(
+                                        this, it, it.id.toInt()
+                                    )
+                                }
+                            } else {
+                                digestPendingProjectChanges.add("${project.title}: ${issue.title}")
+                            }
+                        }
                     }
                 }
 
-                db.projectDao().updateLastChecked(project.nid, newLastChecked * 1000)
+                db.starredProjectDao().updateLastChecked(project.nid, newLastChecked * 1000)
             } catch (e: Exception) {
                 Log.e(TAG, "Error polling project ${project.machineName}: ${e.message}")
             }
+        }
+    }
+
+    private suspend fun checkStarredIssues(settings: NotificationSettings) {
+        if (!settings.notifyStarredIssues) return
+        val db = AppDatabase.getInstance(this)
+        val starredIssues = db.starredIssueDao().getAllIssuesOnce()
+
+        for (starredIssue in starredIssues) {
+            try {
+                val detail = RetrofitClient.service.getNodeDetail(starredIssue.nid)
+                val newChanged = detail.changed?.toLongOrNull() ?: 0L
+                if (newChanged > starredIssue.changed) {
+                    db.starredIssueDao().updateChanged(starredIssue.nid, newChanged)
+                    digestPendingIssueChanges.add(starredIssue.title)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error checking starred issue ${starredIssue.nid}: ${e.message}")
+            }
+        }
+    }
+
+    private suspend fun checkAndSendDigests(settings: NotificationSettings) {
+        val now = System.currentTimeMillis()
+        val intervalMs = when (settings.digestInterval) {
+            "DAILY"  -> 24 * 60 * 60 * 1000L
+            "WEEKLY" -> 7 * 24 * 60 * 60 * 1000L
+            else     -> 60 * 60 * 1000L  // HOURLY
+        }
+
+        // Project digest
+        if (digestPendingProjectChanges.isNotEmpty() &&
+            settings.projectNotifType == "DIGEST" &&
+            now - settings.lastProjectDigestSentAt >= intervalMs) {
+
+            val count = digestPendingProjectChanges.size
+            val items = digestPendingProjectChanges.take(5).joinToString("\n") { "• $it" }
+            val extra = if (count > 5) "\n…and ${count - 5} more" else ""
+            val body = items + extra
+
+            val record = NotificationRecord(
+                title = "Project updates digest ($count issues)",
+                body = body,
+                timestamp = now,
+                recordType = "project_digest",
+                targetNid = "",
+                targetUrl = "",
+                isProject = true
+            )
+            val db = AppDatabase.getInstance(this)
+            db.notificationRecordDao().insert(record)
+            db.notificationRecordDao().pruneOldRecords()
+
+            val inserted = db.notificationRecordDao().getPage(limit = 1, offset = 0).firstOrNull()
+            inserted?.let {
+                NotificationHelper.postDigestNotification(
+                    this, it, NotificationHelper.NOTIF_ID_PROJECT_DIGEST
+                )
+            }
+
+            settingsRepository.updateLastProjectDigestSent(now)
+            digestPendingProjectChanges.clear()
+        }
+
+        // Issue digest
+        if (digestPendingIssueChanges.isNotEmpty() &&
+            settings.notifyStarredIssues &&
+            now - settings.lastIssueDigestSentAt >= intervalMs) {
+
+            val count = digestPendingIssueChanges.size
+            val items = digestPendingIssueChanges.take(5).joinToString("\n") { "• $it" }
+            val extra = if (count > 5) "\n…and ${count - 5} more" else ""
+            val body = items + extra
+
+            val record = NotificationRecord(
+                title = "Starred issues digest ($count updates)",
+                body = body,
+                timestamp = now,
+                recordType = "issue_digest",
+                targetNid = "",
+                targetUrl = "",
+                isProject = false
+            )
+            val db = AppDatabase.getInstance(this)
+            db.notificationRecordDao().insert(record)
+            db.notificationRecordDao().pruneOldRecords()
+
+            val inserted = db.notificationRecordDao().getPage(limit = 1, offset = 0).firstOrNull()
+            inserted?.let {
+                NotificationHelper.postDigestNotification(
+                    this, it, NotificationHelper.NOTIF_ID_ISSUE_DIGEST
+                )
+            }
+
+            settingsRepository.updateLastIssueDigestSent(now)
+            digestPendingIssueChanges.clear()
         }
     }
 

@@ -11,7 +11,8 @@ import com.squareup.moshi.JsonWriter
 data class NodeDetailResponse(
     @Json(name = "nid") val nid: String = "",
     @Json(name = "title") val title: String = "",
-    @Json(name = "body") val body: BodyValue? = null
+    @Json(name = "body") val body: BodyValue? = null,
+    @Json(name = "changed") val changed: String? = null
 )
 
 // No @JsonClass here — we supply a custom adapter registered in RetrofitClient

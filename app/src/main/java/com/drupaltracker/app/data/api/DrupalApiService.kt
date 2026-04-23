@@ -36,4 +36,32 @@ interface DrupalApiService {
         @Query("node") nid: String,
         @Query("limit") limit: Int = 50
     ): CommentListResponse
+
+    @GET("node.json")
+    suspend fun searchProjectsByMachineName(
+        @Query("field_project_machine_name") machineName: String,
+        @Query("limit") limit: Int = 10,
+        @Query("page") page: Int = 0
+    ): ProjectNodeResponse
+
+    @GET("node.json")
+    suspend fun searchIssuesByKeyword(
+        @Query("type") type: String = "project_issue",
+        @Query("title") title: String,
+        @Query("sort") sort: String = "changed",
+        @Query("direction") direction: String = "DESC",
+        @Query("limit") limit: Int = 10,
+        @Query("page") page: Int = 0
+    ): IssueListResponse
+
+    @GET("node.json")
+    suspend fun searchIssuesInProject(
+        @Query("type") type: String = "project_issue",
+        @Query("field_project") projectNid: String,
+        @Query("title") title: String,
+        @Query("sort") sort: String = "changed",
+        @Query("direction") direction: String = "DESC",
+        @Query("limit") limit: Int = 10,
+        @Query("page") page: Int = 0
+    ): IssueListResponse
 }

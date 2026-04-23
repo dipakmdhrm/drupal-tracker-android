@@ -11,6 +11,7 @@ import java.util.concurrent.TimeUnit
 object RetrofitClient {
 
     private const val BASE_URL = "https://www.drupal.org/api-d7/"
+    private const val JSONAPI_BASE_URL = "https://www.drupal.org/jsonapi/"
 
     internal val okHttpClient = OkHttpClient.Builder()
         .addInterceptor { chain ->
@@ -37,4 +38,11 @@ object RetrofitClient {
         .addConverterFactory(MoshiConverterFactory.create(moshi))
         .build()
         .create(DrupalApiService::class.java)
+
+    val jsonApiService: DrupalJsonApiService = Retrofit.Builder()
+        .baseUrl(JSONAPI_BASE_URL)
+        .client(okHttpClient)
+        .addConverterFactory(MoshiConverterFactory.create(moshi))
+        .build()
+        .create(DrupalJsonApiService::class.java)
 }
