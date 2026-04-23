@@ -121,16 +121,13 @@ class PollingForegroundService : Service() {
                                 targetUrl = issue.url,
                                 isProject = false
                             )
-                            db.notificationRecordDao().insert(record)
+                            val insertedId = db.notificationRecordDao().insert(record)
                             db.notificationRecordDao().pruneOldRecords()
 
                             if (settings.projectNotifType == "EVERY_UPDATE") {
-                                val inserted = db.notificationRecordDao().getPage(limit = 1, offset = 0).firstOrNull()
-                                inserted?.let {
-                                    NotificationHelper.postIssueUpdateNotification(
-                                        this, it, it.id.toInt()
-                                    )
-                                }
+                                NotificationHelper.postIssueUpdateNotification(
+                                    this, record.copy(id = insertedId), insertedId.toInt()
+                                )
                             } else {
                                 digestPendingProjectChanges.add("${project.title}: ${issue.title}")
                             }
@@ -192,16 +189,11 @@ class PollingForegroundService : Service() {
                 isProject = true
             )
             val db = AppDatabase.getInstance(this)
-            db.notificationRecordDao().insert(record)
+            val insertedId = db.notificationRecordDao().insert(record)
             db.notificationRecordDao().pruneOldRecords()
-
-            val inserted = db.notificationRecordDao().getPage(limit = 1, offset = 0).firstOrNull()
-            inserted?.let {
-                NotificationHelper.postDigestNotification(
-                    this, it, NotificationHelper.NOTIF_ID_PROJECT_DIGEST
-                )
-            }
-
+            NotificationHelper.postDigestNotification(
+                this, record.copy(id = insertedId), NotificationHelper.NOTIF_ID_PROJECT_DIGEST
+            )
             settingsRepository.updateLastProjectDigestSent(now)
             digestPendingProjectChanges.clear()
         }
@@ -226,16 +218,11 @@ class PollingForegroundService : Service() {
                 isProject = false
             )
             val db = AppDatabase.getInstance(this)
-            db.notificationRecordDao().insert(record)
+            val insertedId = db.notificationRecordDao().insert(record)
             db.notificationRecordDao().pruneOldRecords()
-
-            val inserted = db.notificationRecordDao().getPage(limit = 1, offset = 0).firstOrNull()
-            inserted?.let {
-                NotificationHelper.postDigestNotification(
-                    this, it, NotificationHelper.NOTIF_ID_ISSUE_DIGEST
-                )
-            }
-
+            NotificationHelper.postDigestNotification(
+                this, record.copy(id = insertedId), NotificationHelper.NOTIF_ID_ISSUE_DIGEST
+            )
             settingsRepository.updateLastIssueDigestSent(now)
             digestPendingIssueChanges.clear()
         }

@@ -4,10 +4,14 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
+
+    <!-- Drupal druplicon - white drop body -->
     <path
         android:fillColor="#FFFFFF"
-        android:pathData="M54,30 C40.7,30 30,40.7 30,54 C30,67.3 40.7,78 54,78 C67.3,78 78,67.3 78,54 C78,40.7 67.3,30 54,30 Z M54,70 C44.6,70 37,62.4 37,53 C37,43.6 44.6,36 54,36 C63.4,36 71,43.6 71,53 C71,62.4 63.4,70 54,70 Z" />
+        android:pathData="M54,16 C48,21 33,32 26,42 C19,52 18,59 18,64 C18,80 34.5,94 54,94 C73.5,94 90,80 90,64 C90,59 89,52 82,42 C75,32 60,21 54,16 Z"/>
+
+    <!-- Drupal druplicon - inner ear cutout (background color) -->
     <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M54,42 C48.5,42 44,46.5 44,52 L44,62 L50,62 L50,52 C50,49.8 51.8,48 54,48 C56.2,48 58,49.8 58,52 L58,62 L64,62 L64,52 C64,46.5 59.5,42 54,42 Z" />
+        android:fillColor="#0678BE"
+        android:pathData="M41.5,46 C41.5,38.5 47.2,33 54,33 C60.8,33 66.5,38.5 66.5,46 C66.5,53.5 60.8,59 54,59 C47.2,59 41.5,53.5 41.5,46 Z"/>
 </vector>

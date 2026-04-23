@@ -12,6 +12,7 @@ import com.drupaltracker.app.data.db.AppDatabase
 import com.drupaltracker.app.data.model.IssueApiModel
 import com.drupaltracker.app.data.model.NotificationRecord
 import com.drupaltracker.app.data.model.ProjectNodeApiModel
+import com.drupaltracker.app.data.model.SeenIssue
 import com.drupaltracker.app.data.model.StarredIssue
 import com.drupaltracker.app.data.model.StarredProject
 import com.drupaltracker.app.data.model.toPriorityLabel
@@ -319,7 +320,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 StarredProject(
                     nid = project.nid,
                     machineName = project.machineName ?: project.nid,
-                    title = project.title
+                    title = project.title,
+                    lastChecked = System.currentTimeMillis()
                 )
             )
         }
@@ -381,31 +383,51 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
-        if (cachedSummary != null && commentCount <= summarizedCommentCount) {
-            _state.update {
-                it.copy(summarySheet = SummarySheet(
-                    issueNid = nid,
-                    issueTitle = title,
-                    summary = cachedSummary,
-                    loading = false
-                ))
-            }
-            return
-        }
-
-        _state.update { it.copy(summarySheet = SummarySheet(issueNid = nid, issueTitle = title)) }
         viewModelScope.launch {
+            // Resolve cached summary from DB so non-starred search-result issues benefit too
+            val starredRow = db.starredIssueDao().getIssue(nid)
+            val seenRow = db.issueDao().getIssue(nid)
+            val effectiveCached: String?
+            val effectiveCount: Int
+            when {
+                starredRow?.cachedSummary != null -> {
+                    effectiveCached = starredRow.cachedSummary
+                    effectiveCount = starredRow.summarizedCommentCount
+                }
+                seenRow?.cachedSummary != null -> {
+                    effectiveCached = seenRow.cachedSummary
+                    effectiveCount = seenRow.summarizedCommentCount
+                }
+                else -> {
+                    effectiveCached = cachedSummary
+                    effectiveCount = summarizedCommentCount
+                }
+            }
+
+            if (effectiveCached != null && commentCount <= effectiveCount) {
+                _state.update {
+                    it.copy(summarySheet = SummarySheet(
+                        issueNid = nid,
+                        issueTitle = title,
+                        summary = effectiveCached,
+                        loading = false
+                    ))
+                }
+                return@launch
+            }
+
+            _state.update { it.copy(summarySheet = SummarySheet(issueNid = nid, issueTitle = title)) }
             try {
                 val nodeDeferred = async { RetrofitClient.service.getNodeDetail(nid) }
                 val commentsDeferred = async { RetrofitClient.service.getComments(nid) }
                 val node = nodeDeferred.await()
                 val allComments = commentsDeferred.await().list
 
-                val prompt = if (cachedSummary != null && summarizedCommentCount > 0) {
-                    val newComments = allComments.drop(summarizedCommentCount)
+                val prompt = if (effectiveCached != null && effectiveCount > 0) {
+                    val newComments = allComments.drop(effectiveCount)
                         .take(20)
                         .joinToString("\n\n") { it.commentBody?.value?.stripHtml().orEmpty() }
-                    buildIncrementalPrompt(title, cachedSummary, newComments)
+                    buildIncrementalPrompt(title, effectiveCached, newComments)
                 } else {
                     val bodyText = node.body?.value?.stripHtml().orEmpty()
                     val commentText = allComments.take(20)
@@ -415,12 +437,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
                 val summary = GeminiClient.summarize(apiKey, prompt)
 
-                // Update both starred_issues and seen_issues caches
-                db.starredIssueDao().getIssue(nid)?.let {
-                    db.starredIssueDao().updateSummary(nid, summary, allComments.size)
-                }
-                db.issueDao().getIssue(nid)?.let {
-                    db.issueDao().updateSummary(nid, summary, allComments.size)
+                // Persist to whichever DB rows exist; if none, insert a new seen_issue so
+                // the summary survives the next time the user taps Summary on this issue
+                when {
+                    starredRow != null -> db.starredIssueDao().updateSummary(nid, summary, allComments.size)
+                    seenRow != null -> db.issueDao().updateSummary(nid, summary, allComments.size)
+                    else -> db.issueDao().upsert(
+                        SeenIssue(
+                            nid = nid,
+                            projectNid = "",
+                            title = title,
+                            status = status,
+                            priority = priority,
+                            changed = node.changed?.toLongOrNull() ?: 0L,
+                            url = "https://www.drupal.org/node/$nid",
+                            commentCount = allComments.size,
+                            cachedSummary = summary,
+                            summarizedCommentCount = allComments.size
+                        )
+                    )
                 }
 
                 _state.update { it.copy(summarySheet = it.summarySheet?.copy(summary = summary, loading = false)) }

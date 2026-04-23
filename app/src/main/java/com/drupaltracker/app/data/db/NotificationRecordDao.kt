@@ -12,7 +12,7 @@ interface NotificationRecordDao {
     suspend fun count(): Int
 
     @Insert
-    suspend fun insert(record: NotificationRecord)
+    suspend fun insert(record: NotificationRecord): Long
 
     @Query("DELETE FROM notification_records WHERE id NOT IN (SELECT id FROM notification_records ORDER BY timestamp DESC LIMIT 500)")
     suspend fun pruneOldRecords()

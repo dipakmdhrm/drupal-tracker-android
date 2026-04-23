@@ -114,6 +114,7 @@ class MainActivity : ComponentActivity() {
                                 )
                             },
                             onIssueClick = onIssueClick,
+                            onCloseSummary = { viewModel.closeSummary() },
                             onNotificationsClick = {
                                 viewModel.clearUnreadCount()
                                 viewModel.loadNotifications(reset = true)
