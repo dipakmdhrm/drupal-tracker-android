@@ -175,7 +175,7 @@ private fun IssueRow(
                         modifier = Modifier.size(14.dp)
                     )
                     Spacer(Modifier.width(4.dp))
-                    Text("Summarize", style = MaterialTheme.typography.labelSmall)
+                    Text("Summary", style = MaterialTheme.typography.labelSmall)
                 }
             }
         },
