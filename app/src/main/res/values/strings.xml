@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Drupal Tracker</string>
+    <string name="notification_channel_issues">Issue Updates</string>
+    <string name="notification_channel_service">Background Polling</string>
+    <string name="polling_service_notification">Drupal Tracker is monitoring issues…</string>
+</resources>
