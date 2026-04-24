@@ -1,6 +1,8 @@
 package com.drupaltracker.app.ui.screens
 
 import android.annotation.SuppressLint
+import android.content.Intent
+import android.net.Uri
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
@@ -71,7 +73,12 @@ fun IssueWebViewScreen(
                         override fun shouldOverrideUrlLoading(
                             view: WebView?,
                             request: WebResourceRequest?
-                        ): Boolean = false
+                        ): Boolean {
+                            val host = request?.url?.host ?: return false
+                            if (host.endsWith("drupal.org")) return false
+                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(request.url.toString())))
+                            return true
+                        }
                     }
                     webChromeClient = object : WebChromeClient() {
                         override fun onProgressChanged(view: WebView?, newProgress: Int) {

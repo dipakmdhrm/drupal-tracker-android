@@ -14,6 +14,7 @@ import com.drupaltracker.app.data.preferences.SettingsRepository
 import com.drupaltracker.app.notifications.NotificationHelper
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.first
+import java.util.concurrent.atomic.AtomicBoolean
 
 class PollingForegroundService : Service() {
 
@@ -21,7 +22,7 @@ class PollingForegroundService : Service() {
         private const val TAG = "PollingService"
         const val EXTRA_INTERVAL_MS = "interval_ms"
         const val SERVICE_ID = 1001
-        var isRunning = false
+        val isRunning = AtomicBoolean(false)
     }
 
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -42,7 +43,7 @@ class PollingForegroundService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (!isRunning) {
+        if (!isRunning.get()) {
             val intervalMs = intent?.getLongExtra(EXTRA_INTERVAL_MS, 2 * 60 * 1000L) ?: (2 * 60 * 1000L)
             startPolling(intervalMs)
         }
@@ -50,7 +51,7 @@ class PollingForegroundService : Service() {
     }
 
     private fun startPolling(intervalMs: Long) {
-        isRunning = true
+        isRunning.set(true)
         pollingJob = serviceScope.launch {
             while (isActive) {
                 try {
@@ -229,7 +230,7 @@ class PollingForegroundService : Service() {
     }
 
     override fun onDestroy() {
-        isRunning = false
+        isRunning.set(false)
         serviceScope.cancel()
         super.onDestroy()
     }

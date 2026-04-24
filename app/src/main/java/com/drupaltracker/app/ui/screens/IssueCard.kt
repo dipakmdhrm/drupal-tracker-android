@@ -8,6 +8,7 @@ import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -31,7 +32,7 @@ fun IssueCard(
     onSummarize: () -> Unit
 ) {
     val changedTs = issue.changed.toLongOrNull() ?: 0L
-    val dateFormat = SimpleDateFormat("MMM d, HH:mm", Locale.getDefault())
+    val dateFormat = remember { SimpleDateFormat("MMM d, HH:mm", Locale.getDefault()) }
     val date = if (changedTs > 0) dateFormat.format(Date(changedTs * 1000)) else "—"
     val commentCount = issue.commentCount.toIntOrNull() ?: 0
 

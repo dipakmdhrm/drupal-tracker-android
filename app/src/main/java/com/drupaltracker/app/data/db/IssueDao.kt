@@ -15,12 +15,6 @@ interface IssueDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(issue: SeenIssue)
 
-    @Query("DELETE FROM seen_issues WHERE projectNid = :projectNid")
-    suspend fun deleteForProject(projectNid: String)
-
-    @Query("SELECT COUNT(*) FROM seen_issues WHERE projectNid = :projectNid")
-    suspend fun countForProject(projectNid: String): Int
-
     @Query("UPDATE seen_issues SET cachedSummary = :summary, summarizedCommentCount = :commentCount WHERE nid = :nid")
     suspend fun updateSummary(nid: String, summary: String, commentCount: Int)
 }

@@ -69,7 +69,7 @@ fun SearchTabContent(
                 .padding(horizontal = 16.dp),
             placeholder = {
                 Text(
-                    if (state.searchMode == SearchMode.BY_PROJECT) "Machine name (e.g. views) or title keywords"
+                    if (state.searchMode == SearchMode.BY_PROJECT) "Machine name (e.g. pathauto) or title keywords"
                     else "Issue title (contains) or NID number"
                 )
             },

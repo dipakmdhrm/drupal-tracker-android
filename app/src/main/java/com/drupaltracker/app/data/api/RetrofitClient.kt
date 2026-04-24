@@ -27,7 +27,7 @@ object RetrofitClient {
         .readTimeout(30, TimeUnit.SECONDS)
         .build()
 
-    private val moshi = Moshi.Builder()
+    internal val moshi = Moshi.Builder()
         .add(BodyValue::class.java, BodyValueAdapter())
         .addLast(KotlinJsonAdapterFactory())
         .build()

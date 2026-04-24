@@ -2,8 +2,6 @@ package com.drupaltracker.app.data.api
 
 import com.squareup.moshi.Json
 import com.squareup.moshi.JsonClass
-import com.squareup.moshi.Moshi
-import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -63,20 +61,18 @@ object GeminiClient {
 
     private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
 
-    private val moshi = Moshi.Builder()
-        .addLast(KotlinJsonAdapterFactory())
-        .build()
-
     suspend fun summarize(apiKey: String, prompt: String): String = withContext(Dispatchers.IO) {
+        val moshi = RetrofitClient.moshi
         val requestBody = GeminiRequest(
             contents = listOf(GeminiContent(parts = listOf(GeminiPart(text = prompt))))
         )
         val reqJson = moshi.adapter(GeminiRequest::class.java).toJson(requestBody)
 
         val request = Request.Builder()
-            .url("$ENDPOINT?key=$apiKey")
-            .post(reqJson.toRequestBody(JSON_MEDIA_TYPE))
+            .url(ENDPOINT)
+            .addHeader("x-goog-api-key", apiKey)
             .addHeader("Content-Type", "application/json")
+            .post(reqJson.toRequestBody(JSON_MEDIA_TYPE))
             .build()
 
         RetrofitClient.okHttpClient.newCall(request).execute().use { response ->

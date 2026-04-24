@@ -18,7 +18,6 @@ object NotificationHelper {
     const val CHANNEL_DIGEST   = "drupal_digest"
 
     const val EXTRA_OPEN_NOTIFICATION_STREAM = "open_notification_stream"
-    const val EXTRA_FOCUS_RECORD_ID          = "focus_record_id"
 
     const val NOTIF_ID_PROJECT_DIGEST = 2001
     const val NOTIF_ID_ISSUE_DIGEST   = 2002
@@ -90,11 +89,10 @@ object NotificationHelper {
         val intent = Intent(context, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
             putExtra(EXTRA_OPEN_NOTIFICATION_STREAM, true)
-            putExtra(EXTRA_FOCUS_RECORD_ID, record.id)
         }
         return PendingIntent.getActivity(
             context,
-            record.id.toInt(),
+            (record.id and 0x7FFFFFFFL).toInt(),
             intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )

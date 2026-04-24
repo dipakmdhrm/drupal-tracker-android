@@ -42,17 +42,6 @@ data class ProjectNodeApiModel(
 
 // --- Room entities ---
 
-@Entity(tableName = "watched_projects")
-data class WatchedProject(
-    @PrimaryKey val nid: String,
-    val machineName: String,
-    val title: String,
-    val filterStatus: String? = null,   // null = all statuses
-    val filterPriority: String? = null, // null = all priorities
-    val lastChecked: Long = 0L,
-    val addedAt: Long = System.currentTimeMillis()
-)
-
 @Entity(tableName = "seen_issues")
 data class SeenIssue(
     @PrimaryKey val nid: String,
