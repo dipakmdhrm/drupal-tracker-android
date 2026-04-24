@@ -166,13 +166,39 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 when (_state.value.searchMode) {
                     SearchMode.BY_PROJECT -> {
-                        val response = RetrofitClient.jsonApiService.searchProjectsContains(value = query, offset = 0)
-                        val projects = response.data.map { it.toProjectNodeApiModel() }
+                        var projects: List<ProjectNodeApiModel> = emptyList()
+                        var hasMore = false
+
+                        // Machine name: no spaces, all-lowercase or contains underscores
+                        if (isMachineName(query)) {
+                            projects = runCatching {
+                                RetrofitClient.service.getProjectByMachineName(query)
+                            }.getOrNull()?.list.orEmpty()
+                        }
+
+                        // Fall back to JSON:API title CONTAINS (project_module)
+                        if (projects.isEmpty()) {
+                            val resp = runCatching {
+                                RetrofitClient.jsonApiService.searchProjects(
+                                    filters = mapOf(
+                                        "filter[title][operator]" to "CONTAINS",
+                                        "filter[title][value]" to query
+                                    ),
+                                    offset = 0
+                                )
+                            }.getOrNull()
+                            projects = resp?.data.orEmpty().map { it.toProjectNodeApiModel() }
+                            hasMore = resp?.links?.next != null
+                        }
+
                         _state.update {
                             it.copy(
                                 searchIsLoading = false,
                                 projectSearchResults = projects,
-                                searchHasMore = response.links?.next != null
+                                searchHasMore = hasMore,
+                                searchError = if (projects.isEmpty())
+                                    "Project doesn't exist or not exposed by drupal.org api yet"
+                                else null
                             )
                         }
                     }
@@ -220,9 +246,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 when (state.searchMode) {
                     SearchMode.BY_PROJECT -> {
-                        val offset = state.projectSearchResults.size
-                        val response = RetrofitClient.jsonApiService.searchProjectsContains(
-                            value = state.searchQuery, offset = offset
+                        val offset = nextPage * PAGE_SIZE
+                        val response = RetrofitClient.jsonApiService.searchProjects(
+                            filters = mapOf(
+                                "filter[title][operator]" to "CONTAINS",
+                                "filter[title][value]" to state.searchQuery
+                            ),
+                            offset = offset
                         )
                         val projects = response.data.map { it.toProjectNodeApiModel() }
                         _state.update {
@@ -506,6 +536,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun saveNotificationSettings(s: NotificationSettings) {
         viewModelScope.launch { settings.saveNotificationSettings(s) }
     }
+
+    /** True when the query looks like a machine name: no spaces, all-lowercase or has underscores. */
+    private fun isMachineName(query: String) =
+        !query.contains(' ') && (query == query.lowercase() || query.contains('_'))
 
     // --- Prompts ---
 
