@@ -7,6 +7,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -24,7 +25,8 @@ import java.util.*
 fun NotificationStreamScreen(
     state: UiState,
     onBack: () -> Unit,
-    onLoadMore: () -> Unit
+    onLoadMore: () -> Unit,
+    onClearAll: () -> Unit
 ) {
     Scaffold(
         topBar = {
@@ -37,6 +39,17 @@ fun NotificationStreamScreen(
                             contentDescription = "Back",
                             tint = MaterialTheme.colorScheme.onPrimary
                         )
+                    }
+                },
+                actions = {
+                    if (state.notifications.isNotEmpty()) {
+                        IconButton(onClick = onClearAll) {
+                            Icon(
+                                Icons.Default.DeleteSweep,
+                                contentDescription = "Clear all",
+                                tint = MaterialTheme.colorScheme.onPrimary
+                            )
+                        }
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(

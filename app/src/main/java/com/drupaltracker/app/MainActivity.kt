@@ -14,7 +14,6 @@ import androidx.compose.runtime.getValue
 import androidx.core.content.ContextCompat
 import com.drupaltracker.app.data.model.IssueApiModel
 import com.drupaltracker.app.notifications.NotificationHelper
-import com.drupaltracker.app.service.PollingForegroundService
 import com.drupaltracker.app.ui.navigation.Screen
 import com.drupaltracker.app.ui.screens.IssueWebViewScreen
 import com.drupaltracker.app.ui.screens.MainTabbedScreen
@@ -37,7 +36,6 @@ class MainActivity : ComponentActivity() {
 
         NotificationHelper.createChannels(this)
         requestNotificationPermissionIfNeeded()
-        startPollingService()
 
         // Handle cold-start intent from notification
         handleNotificationIntent(intent)
@@ -156,7 +154,8 @@ class MainActivity : ComponentActivity() {
                         NotificationStreamScreen(
                             state = state,
                             onBack = { viewModel.navigateBack() },
-                            onLoadMore = { viewModel.loadMoreNotifications() }
+                            onLoadMore = { viewModel.loadMoreNotifications() },
+                            onClearAll = { viewModel.clearAllNotifications() }
                         )
                     }
                     is Screen.Settings -> {
@@ -184,10 +183,6 @@ class MainActivity : ComponentActivity() {
             viewModel.loadNotifications(reset = true)
             viewModel.navigate(Screen.NotificationStream)
         }
-    }
-
-    private fun startPollingService() {
-        startForegroundService(Intent(this, PollingForegroundService::class.java))
     }
 
     private fun requestNotificationPermissionIfNeeded() {

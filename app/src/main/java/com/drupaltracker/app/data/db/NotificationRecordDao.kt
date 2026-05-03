@@ -16,4 +16,7 @@ interface NotificationRecordDao {
 
     @Query("DELETE FROM notification_records WHERE id NOT IN (SELECT id FROM notification_records ORDER BY timestamp DESC LIMIT 500)")
     suspend fun pruneOldRecords()
+
+    @Query("DELETE FROM notification_records")
+    suspend fun deleteAll()
 }

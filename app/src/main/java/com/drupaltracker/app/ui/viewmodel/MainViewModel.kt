@@ -20,6 +20,7 @@ import com.drupaltracker.app.data.model.toProjectNodeApiModel
 import com.drupaltracker.app.data.model.toStatusLabel
 import com.drupaltracker.app.data.preferences.NotificationSettings
 import com.drupaltracker.app.data.preferences.SettingsRepository
+import com.drupaltracker.app.service.PollingScheduler
 import com.drupaltracker.app.ui.navigation.Screen
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.*
@@ -99,7 +100,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 _state.update { it.copy(notificationSettings = ns) }
             }
         }
-        loadNotifications(reset = true)
+        loadNotifications(reset = true, updateUnreadCount = true)
+        schedulePollingIfEnabled()
+    }
+
+    private fun schedulePollingIfEnabled() {
+        viewModelScope.launch {
+            val ns = settings.notificationSettingsFlow.first()
+            val context = getApplication<Application>()
+            if (ns.enabled) PollingScheduler.schedule(context, ns.pollIntervalMinutes)
+        }
     }
 
     // --- Navigation ---
@@ -500,7 +510,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     // --- Notification stream ---
 
-    fun loadNotifications(reset: Boolean = false) {
+    fun loadNotifications(reset: Boolean = false, updateUnreadCount: Boolean = false) {
         val offset = if (reset) 0 else _state.value.notifications.size
         viewModelScope.launch {
             try {
@@ -511,7 +521,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         notifications = if (reset) page else it.notifications + page,
                         notifPage = if (reset) 0 else it.notifPage + 1,
                         notifHasMore = (if (reset) page.size else it.notifications.size + page.size) < total,
-                        unreadNotifCount = if (reset) total else it.unreadNotifCount
+                        unreadNotifCount = if (updateUnreadCount) total else it.unreadNotifCount
                     )
                 }
             } catch (e: Exception) {
@@ -527,6 +537,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun clearUnreadCount() = _state.update { it.copy(unreadNotifCount = 0) }
 
+    fun clearAllNotifications() {
+        viewModelScope.launch {
+            db.notificationRecordDao().deleteAll()
+            _state.update { it.copy(notifications = emptyList(), notifHasMore = false, unreadNotifCount = 0) }
+        }
+    }
+
     // --- Settings ---
 
     fun saveApiKey(key: String) {
@@ -534,7 +551,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun saveNotificationSettings(s: NotificationSettings) {
-        viewModelScope.launch { settings.saveNotificationSettings(s) }
+        viewModelScope.launch {
+            settings.saveNotificationSettings(s)
+            val context = getApplication<Application>()
+            if (s.enabled) {
+                PollingScheduler.schedule(context, s.pollIntervalMinutes, update = true)
+            } else {
+                PollingScheduler.cancel(context)
+            }
+        }
     }
 
     /** True when the query looks like a machine name: no spaces, all-lowercase or has underscores. */

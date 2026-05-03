@@ -109,6 +109,27 @@ fun SettingsScreen(
 
             AnimatedVisibility(visible = notificationSettings.enabled) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        "Check interval",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf(15L to "15 min", 30L to "30 min", 60L to "1 hour", 360L to "6 hours")
+                            .forEach { (mins, label) ->
+                                FilterChip(
+                                    selected = notificationSettings.pollIntervalMinutes == mins,
+                                    onClick = {
+                                        onSaveNotificationSettings(
+                                            notificationSettings.copy(pollIntervalMinutes = mins)
+                                        )
+                                    },
+                                    label = { Text(label) },
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                    }
+
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,

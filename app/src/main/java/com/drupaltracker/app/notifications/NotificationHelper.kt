@@ -13,9 +13,8 @@ import com.drupaltracker.app.data.model.NotificationRecord
 
 object NotificationHelper {
 
-    const val CHANNEL_ISSUES   = "drupal_issues"
-    const val CHANNEL_SERVICE  = "drupal_service"
-    const val CHANNEL_DIGEST   = "drupal_digest"
+    const val CHANNEL_ISSUES = "drupal_issues"
+    const val CHANNEL_DIGEST = "drupal_digest"
 
     const val EXTRA_OPEN_NOTIFICATION_STREAM = "open_notification_stream"
 
@@ -31,14 +30,6 @@ object NotificationHelper {
                 context.getString(R.string.notification_channel_issues),
                 NotificationManager.IMPORTANCE_DEFAULT
             ).apply { description = "Notifications for new or updated Drupal.org issues" }
-        )
-
-        nm.createNotificationChannel(
-            NotificationChannel(
-                CHANNEL_SERVICE,
-                context.getString(R.string.notification_channel_service),
-                NotificationManager.IMPORTANCE_LOW
-            ).apply { description = "Persistent notification while polling runs" }
         )
 
         nm.createNotificationChannel(
@@ -75,15 +66,6 @@ object NotificationHelper {
             .build()
         postSafely(context, notifId, notification)
     }
-
-    fun buildServiceNotification(context: Context) =
-        NotificationCompat.Builder(context, CHANNEL_SERVICE)
-            .setSmallIcon(android.R.drawable.ic_popup_sync)
-            .setContentTitle(context.getString(R.string.app_name))
-            .setContentText(context.getString(R.string.polling_service_notification))
-            .setOngoing(true)
-            .setSilent(true)
-            .build()
 
     private fun buildAppPendingIntent(context: Context, record: NotificationRecord): PendingIntent {
         val intent = Intent(context, MainActivity::class.java).apply {
